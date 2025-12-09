@@ -19,7 +19,8 @@ from utils import (
     read_file, write_file, file_exists, directory_exists,
     create_directory, copy_directory, copy_file,
     list_files, parse_paper_review, PaperScore,
-    get_timestamp, ProgressTracker, extract_latex_content
+    get_timestamp, ProgressTracker, extract_latex_content,
+    compile_latex, LaTeXCompileResult
 )
 from workflow_single_executor import (
     SingleWorkflowExecutor, WorkflowContext, run_single_workflow
@@ -463,6 +464,47 @@ class AllWorkflowExecutor:
         en_latex = extract_latex_content(en_paper)
         write_file(en_paper_path, en_latex)
 
+        # 编译LaTeX论文生成PDF
+        logger.info("编译最终论文...")
+        compile_results = []
+
+        # 编译中文论文
+        cn_result = compile_latex(final_paper_path)
+        cn_pdf_path = None
+        if cn_result.success:
+            cn_pdf_path = cn_result.pdf_path
+            logger.info(f"中文论文PDF生成成功: {cn_pdf_path}")
+            compile_results.append(("中文论文", True, cn_pdf_path))
+        else:
+            logger.warning(f"中文论文编译失败: {cn_result.error_message}")
+            compile_results.append(("中文论文", False, cn_result.error_message))
+            # 保存编译日志
+            log_path = os.path.join(paper_dir, "ch01_compile.log")
+            write_file(log_path, cn_result.log_output)
+
+        # 编译英文论文
+        en_result = compile_latex(en_paper_path)
+        en_pdf_path = None
+        if en_result.success:
+            en_pdf_path = en_result.pdf_path
+            logger.info(f"英文论文PDF生成成功: {en_pdf_path}")
+            compile_results.append(("英文论文", True, en_pdf_path))
+        else:
+            logger.warning(f"英文论文编译失败: {en_result.error_message}")
+            compile_results.append(("英文论文", False, en_result.error_message))
+            log_path = os.path.join(paper_dir, "en01_compile.log")
+            write_file(log_path, en_result.log_output)
+
+        # 生成编译报告
+        report_lines = ["# 最终论文 LaTeX 编译报告\n"]
+        for name, success, info in compile_results:
+            status = "✓ 成功" if success else "✗ 失败"
+            report_lines.append(f"## {name}: {status}")
+            report_lines.append(f"- {info}\n")
+
+        compile_report_path = os.path.join(final_dir, "compile_report.md")
+        write_file(compile_report_path, '\n'.join(report_lines))
+
         # 创建最终结果
         final_result = ModelResult(
             model_name="synthesis",
@@ -474,6 +516,10 @@ class AllWorkflowExecutor:
 
         logger.info(f"最终论文已生成: {final_paper_path}")
         logger.info(f"英文版论文已生成: {en_paper_path}")
+        if cn_pdf_path:
+            logger.info(f"中文PDF: {cn_pdf_path}")
+        if en_pdf_path:
+            logger.info(f"英文PDF: {en_pdf_path}")
 
         return final_result, synthesis_report
 

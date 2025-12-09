@@ -19,7 +19,8 @@ from utils import (
     create_directory, list_files, extract_python_code,
     extract_latex_content, parse_paper_review, PaperScore,
     WorkflowState, save_state, load_state, get_timestamp,
-    ProgressTracker, setup_work_directory
+    ProgressTracker, setup_work_directory,
+    compile_latex, LaTeXCompileResult
 )
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,8 @@ class WorkflowContext:
     figures: List[str] = field(default_factory=list)
     paper_cn_path: str = ""
     paper_en_path: str = ""
+    paper_cn_pdf: str = ""  # 中文论文PDF路径
+    paper_en_pdf: str = ""  # 英文论文PDF路径
     score: Optional[PaperScore] = None
 
 
@@ -128,6 +131,7 @@ class SingleWorkflowExecutor:
             8: self._step_write_paper_cn,
             9: self._step_review_and_improve,
             10: self._step_translate_paper,
+            11: self._step_compile_papers,
         }
 
         handler = step_handlers.get(step_id)
@@ -649,6 +653,61 @@ class SingleWorkflowExecutor:
 
         logger.info(f"英文论文已生成: {en_path}")
         return True
+
+    async def _step_compile_papers(self) -> bool:
+        """步骤11: 编译LaTeX论文生成PDF"""
+        logger.info("步骤11: 编译LaTeX论文生成PDF")
+
+        paper_dir = os.path.join(self.work_dir, "paper")
+        compile_results = []
+
+        # 编译中文论文
+        if self.context.paper_cn_path and file_exists(self.context.paper_cn_path):
+            logger.info(f"编译中文论文: {self.context.paper_cn_path}")
+            cn_result = compile_latex(self.context.paper_cn_path)
+
+            if cn_result.success:
+                self.context.paper_cn_pdf = cn_result.pdf_path
+                logger.info(f"中文论文PDF生成成功: {cn_result.pdf_path}")
+                compile_results.append(("中文论文", True, cn_result.pdf_path))
+            else:
+                logger.warning(f"中文论文编译失败: {cn_result.error_message}")
+                compile_results.append(("中文论文", False, cn_result.error_message))
+
+                # 保存编译日志
+                log_path = os.path.join(paper_dir, "ch01_compile.log")
+                write_file(log_path, cn_result.log_output)
+
+        # 编译英文论文
+        if self.context.paper_en_path and file_exists(self.context.paper_en_path):
+            logger.info(f"编译英文论文: {self.context.paper_en_path}")
+            en_result = compile_latex(self.context.paper_en_path)
+
+            if en_result.success:
+                self.context.paper_en_pdf = en_result.pdf_path
+                logger.info(f"英文论文PDF生成成功: {en_result.pdf_path}")
+                compile_results.append(("英文论文", True, en_result.pdf_path))
+            else:
+                logger.warning(f"英文论文编译失败: {en_result.error_message}")
+                compile_results.append(("英文论文", False, en_result.error_message))
+
+                # 保存编译日志
+                log_path = os.path.join(paper_dir, "en01_compile.log")
+                write_file(log_path, en_result.log_output)
+
+        # 生成编译报告
+        report_lines = ["# LaTeX 编译报告\n"]
+        for name, success, info in compile_results:
+            status = "✓ 成功" if success else "✗ 失败"
+            report_lines.append(f"## {name}: {status}")
+            report_lines.append(f"- {info}\n")
+
+        report_path = os.path.join(self.work_dir, "compile_report.md")
+        write_file(report_path, '\n'.join(report_lines))
+
+        # 只要有一个编译成功就算步骤成功
+        success_count = sum(1 for _, s, _ in compile_results if s)
+        return success_count > 0
 
     def _save_current_state(self, next_step: int, failed: bool = False):
         """保存当前状态"""

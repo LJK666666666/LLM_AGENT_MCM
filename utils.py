@@ -408,3 +408,368 @@ class ProgressTracker:
             "percentage": self.current_step / self.total_steps * 100,
             "steps": list(zip(self.step_names, self.step_times))
         }
+
+
+# ============== LaTeX 编译相关函数 ==============
+
+import subprocess
+import platform
+from dataclasses import dataclass as latex_dataclass
+
+
+@dataclass
+class LaTeXCompileResult:
+    """LaTeX编译结果"""
+    success: bool
+    pdf_path: Optional[str]
+    log_output: str
+    error_message: str = ""
+
+
+def find_latex_compiler() -> Optional[str]:
+    """查找可用的LaTeX编译器
+
+    Returns:
+        编译器命令名称，如果未找到返回None
+    """
+    # 按优先级尝试不同的编译器
+    compilers = ["xelatex", "pdflatex", "lualatex"]
+
+    for compiler in compilers:
+        try:
+            # Windows 使用 where，Unix 使用 which
+            if platform.system() == "Windows":
+                result = subprocess.run(
+                    ["where", compiler],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+            else:
+                result = subprocess.run(
+                    ["which", compiler],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+
+            if result.returncode == 0:
+                logging.info(f"找到LaTeX编译器: {compiler}")
+                return compiler
+        except Exception:
+            continue
+
+    logging.warning("未找到可用的LaTeX编译器")
+    return None
+
+
+def compile_latex(
+    tex_file: str,
+    output_dir: Optional[str] = None,
+    compiler: Optional[str] = None,
+    runs: int = 2,
+    timeout: int = 120
+) -> LaTeXCompileResult:
+    """编译LaTeX文件生成PDF
+
+    Args:
+        tex_file: .tex文件的完整路径
+        output_dir: 输出目录，默认与tex文件同目录
+        compiler: 编译器命令，默认自动检测
+        runs: 编译次数（处理交叉引用通常需要2次）
+        timeout: 单次编译超时时间（秒）
+
+    Returns:
+        LaTeXCompileResult 编译结果对象
+    """
+    if not file_exists(tex_file):
+        return LaTeXCompileResult(
+            success=False,
+            pdf_path=None,
+            log_output="",
+            error_message=f"文件不存在: {tex_file}"
+        )
+
+    # 确定编译器
+    if compiler is None:
+        compiler = find_latex_compiler()
+        if compiler is None:
+            return LaTeXCompileResult(
+                success=False,
+                pdf_path=None,
+                log_output="",
+                error_message="未找到可用的LaTeX编译器，请安装TeX Live或MiKTeX"
+            )
+
+    # 确定工作目录和输出目录
+    tex_dir = os.path.dirname(os.path.abspath(tex_file))
+    tex_filename = os.path.basename(tex_file)
+    tex_basename = os.path.splitext(tex_filename)[0]
+
+    if output_dir is None:
+        output_dir = tex_dir
+
+    # 确保输出目录存在
+    create_directory(output_dir)
+
+    # 构建编译命令
+    cmd = [
+        compiler,
+        "-interaction=nonstopmode",  # 非交互模式，遇错不停
+        "-file-line-error",  # 显示文件行号
+        f"-output-directory={output_dir}",
+        tex_filename
+    ]
+
+    # 如果使用xelatex，添加支持中文的选项
+    if compiler == "xelatex":
+        # xelatex 默认支持 UTF-8 和中文
+        pass
+
+    all_output = []
+    last_error = ""
+
+    try:
+        for run_num in range(1, runs + 1):
+            logging.info(f"LaTeX编译第 {run_num}/{runs} 次: {tex_filename}")
+
+            result = subprocess.run(
+                cmd,
+                cwd=tex_dir,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                encoding='utf-8',
+                errors='replace'
+            )
+
+            all_output.append(f"=== 第 {run_num} 次编译 ===\n")
+            all_output.append(result.stdout)
+            if result.stderr:
+                all_output.append(f"\nSTDERR:\n{result.stderr}")
+
+            # 检查是否成功
+            if result.returncode != 0:
+                # 尝试从日志中提取错误信息
+                log_file = os.path.join(output_dir, f"{tex_basename}.log")
+                if file_exists(log_file):
+                    log_content = read_file(log_file) or ""
+                    # 提取错误行
+                    error_lines = []
+                    for line in log_content.split('\n'):
+                        if '!' in line or 'Error' in line or 'error' in line:
+                            error_lines.append(line)
+                    if error_lines:
+                        last_error = '\n'.join(error_lines[:10])  # 最多10行错误
+                    else:
+                        last_error = result.stdout[-1000:] if result.stdout else "未知错误"
+                else:
+                    last_error = result.stdout[-1000:] if result.stdout else "编译失败"
+
+                # 第一次编译失败就退出
+                if run_num == 1:
+                    return LaTeXCompileResult(
+                        success=False,
+                        pdf_path=None,
+                        log_output='\n'.join(all_output),
+                        error_message=last_error
+                    )
+
+        # 检查PDF是否生成
+        pdf_path = os.path.join(output_dir, f"{tex_basename}.pdf")
+        if file_exists(pdf_path):
+            logging.info(f"PDF生成成功: {pdf_path}")
+            return LaTeXCompileResult(
+                success=True,
+                pdf_path=pdf_path,
+                log_output='\n'.join(all_output)
+            )
+        else:
+            return LaTeXCompileResult(
+                success=False,
+                pdf_path=None,
+                log_output='\n'.join(all_output),
+                error_message="编译完成但未生成PDF文件"
+            )
+
+    except subprocess.TimeoutExpired:
+        return LaTeXCompileResult(
+            success=False,
+            pdf_path=None,
+            log_output='\n'.join(all_output),
+            error_message=f"编译超时（{timeout}秒）"
+        )
+    except Exception as e:
+        return LaTeXCompileResult(
+            success=False,
+            pdf_path=None,
+            log_output='\n'.join(all_output),
+            error_message=f"编译异常: {str(e)}"
+        )
+
+
+def compile_latex_with_bibtex(
+    tex_file: str,
+    output_dir: Optional[str] = None,
+    compiler: Optional[str] = None,
+    timeout: int = 120
+) -> LaTeXCompileResult:
+    """编译LaTeX文件（包含BibTeX处理）
+
+    完整流程: latex -> bibtex -> latex -> latex
+
+    Args:
+        tex_file: .tex文件的完整路径
+        output_dir: 输出目录
+        compiler: 编译器命令
+        timeout: 单次编译超时时间
+
+    Returns:
+        LaTeXCompileResult 编译结果对象
+    """
+    if not file_exists(tex_file):
+        return LaTeXCompileResult(
+            success=False,
+            pdf_path=None,
+            log_output="",
+            error_message=f"文件不存在: {tex_file}"
+        )
+
+    # 确定编译器
+    if compiler is None:
+        compiler = find_latex_compiler()
+        if compiler is None:
+            return LaTeXCompileResult(
+                success=False,
+                pdf_path=None,
+                log_output="",
+                error_message="未找到可用的LaTeX编译器"
+            )
+
+    tex_dir = os.path.dirname(os.path.abspath(tex_file))
+    tex_filename = os.path.basename(tex_file)
+    tex_basename = os.path.splitext(tex_filename)[0]
+
+    if output_dir is None:
+        output_dir = tex_dir
+
+    create_directory(output_dir)
+
+    all_output = []
+
+    try:
+        # 第一次 LaTeX 编译
+        logging.info(f"LaTeX编译 (1/4): {tex_filename}")
+        cmd_latex = [
+            compiler,
+            "-interaction=nonstopmode",
+            "-file-line-error",
+            f"-output-directory={output_dir}",
+            tex_filename
+        ]
+
+        result = subprocess.run(
+            cmd_latex, cwd=tex_dir, capture_output=True,
+            text=True, timeout=timeout, encoding='utf-8', errors='replace'
+        )
+        all_output.append(f"=== LaTeX 第1次 ===\n{result.stdout}")
+
+        # BibTeX 编译
+        aux_file = os.path.join(output_dir, f"{tex_basename}.aux")
+        if file_exists(aux_file):
+            logging.info(f"BibTeX编译 (2/4): {tex_basename}")
+            cmd_bibtex = ["bibtex", os.path.join(output_dir, tex_basename)]
+
+            result_bib = subprocess.run(
+                cmd_bibtex, cwd=tex_dir, capture_output=True,
+                text=True, timeout=timeout, encoding='utf-8', errors='replace'
+            )
+            all_output.append(f"=== BibTeX ===\n{result_bib.stdout}")
+
+        # 第二次 LaTeX 编译
+        logging.info(f"LaTeX编译 (3/4): {tex_filename}")
+        result = subprocess.run(
+            cmd_latex, cwd=tex_dir, capture_output=True,
+            text=True, timeout=timeout, encoding='utf-8', errors='replace'
+        )
+        all_output.append(f"=== LaTeX 第2次 ===\n{result.stdout}")
+
+        # 第三次 LaTeX 编译
+        logging.info(f"LaTeX编译 (4/4): {tex_filename}")
+        result = subprocess.run(
+            cmd_latex, cwd=tex_dir, capture_output=True,
+            text=True, timeout=timeout, encoding='utf-8', errors='replace'
+        )
+        all_output.append(f"=== LaTeX 第3次 ===\n{result.stdout}")
+
+        # 检查PDF
+        pdf_path = os.path.join(output_dir, f"{tex_basename}.pdf")
+        if file_exists(pdf_path):
+            logging.info(f"PDF生成成功: {pdf_path}")
+            return LaTeXCompileResult(
+                success=True,
+                pdf_path=pdf_path,
+                log_output='\n'.join(all_output)
+            )
+        else:
+            return LaTeXCompileResult(
+                success=False,
+                pdf_path=None,
+                log_output='\n'.join(all_output),
+                error_message="编译完成但未生成PDF文件"
+            )
+
+    except subprocess.TimeoutExpired:
+        return LaTeXCompileResult(
+            success=False,
+            pdf_path=None,
+            log_output='\n'.join(all_output),
+            error_message=f"编译超时（{timeout}秒）"
+        )
+    except Exception as e:
+        return LaTeXCompileResult(
+            success=False,
+            pdf_path=None,
+            log_output='\n'.join(all_output),
+            error_message=f"编译异常: {str(e)}"
+        )
+
+
+def clean_latex_auxiliary_files(
+    tex_file: str,
+    output_dir: Optional[str] = None
+) -> List[str]:
+    """清理LaTeX编译产生的辅助文件
+
+    Args:
+        tex_file: .tex文件路径
+        output_dir: 输出目录
+
+    Returns:
+        被删除的文件列表
+    """
+    tex_dir = os.path.dirname(os.path.abspath(tex_file))
+    tex_basename = os.path.splitext(os.path.basename(tex_file))[0]
+
+    if output_dir is None:
+        output_dir = tex_dir
+
+    # 要清理的扩展名
+    aux_extensions = [
+        '.aux', '.log', '.out', '.toc', '.lof', '.lot',
+        '.bbl', '.blg', '.nav', '.snm', '.vrb',
+        '.fdb_latexmk', '.fls', '.synctex.gz'
+    ]
+
+    deleted_files = []
+
+    for ext in aux_extensions:
+        aux_path = os.path.join(output_dir, f"{tex_basename}{ext}")
+        if file_exists(aux_path):
+            try:
+                os.remove(aux_path)
+                deleted_files.append(aux_path)
+            except Exception as e:
+                logging.warning(f"无法删除文件 {aux_path}: {e}")
+
+    return deleted_files

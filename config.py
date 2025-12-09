@@ -155,6 +155,7 @@ WORKFLOW_STEPS = [
     WorkflowStep(8, "write_paper_cn", "用中文撰写论文ch01.tex"),
     WorkflowStep(9, "review_and_improve", "评分并改进论文", requires_user_input=True),
     WorkflowStep(10, "translate_paper", "翻译论文为英文版en01.tex", requires_user_input=True),
+    WorkflowStep(11, "compile_papers", "编译LaTeX论文生成PDF"),
 ]
 
 

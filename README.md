@@ -2,13 +2,15 @@
 
 美国大学生数学建模竞赛 (MCM/ICM) 自动化Agent系统
 
+![技术架构图](architechture.png "技术架构图")
+
 ## 功能特性
 
-- **多模型并行**: 支持同时使用 Claude、Gemini、GPT 三个模型并行生成解决方案
+- **多模型并行**: 支持同时使用 Claude、Gemini、GPT 等多个模型并行生成解决方案
 - **完整工作流程**: 从问题分析、模型设计、代码实现到论文撰写的全流程自动化
 - **智能评分**: 对生成的论文进行自动评分和改进建议
 - **方案综合**: 综合多个模型的优点，生成最终的高质量论文
-- **API兼容**: 支持 OpenRouter API，并预留 OpenAI、Anthropic 等 API 接口
+- **API兼容**: 支持 OpenRouter API 、Intern API (--intern)，并预留 OpenAI、Anthropic 等 API 接口
 
 ## 系统架构
 
