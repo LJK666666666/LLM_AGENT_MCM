@@ -1,6 +1,6 @@
 # LLM Agent MCM
 
-美国大学生数学建模竞赛 (MCM/ICM) 自动化Agent系统
+本项目为美国大学生数学建模竞赛 (MCM/ICM) 自动化Agent系统。同时也是书生大模型实战营项目。
 
 ![技术架构图](architechture.png "技术架构图")
 
